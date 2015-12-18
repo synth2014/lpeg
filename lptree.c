@@ -18,6 +18,7 @@
 #include "lptree.h"
 
 
+
 /* number of siblings for each tree */
 const byte numsiblings[] = {
   0, 0, 0,	/* char, set, any */
@@ -155,7 +156,7 @@ static Pattern *getpattern (lua_State *L, int idx) {
 
 
 static int getsize (lua_State *L, int idx) {
-  return (lua_objlen(L, idx) - sizeof(Pattern)) / sizeof(TTree) + 1;
+  return (lua_rawlen(L, idx) - sizeof(Pattern)) / sizeof(TTree) + 1;
 }
 
 
@@ -215,15 +216,15 @@ static int addtoktable (lua_State *L, int idx) {
     return 0;
   else {
     int n;
-    lua_getfenv(L, -1);  /* get ktable from pattern */
-    n = lua_objlen(L, -1);
+    lua_getuservalue(L, -1);  /* get ktable from pattern */
+    n = lua_rawlen(L, -1);
     if (n == 0) {  /* is it empty/non-existent? */
       lua_pop(L, 1);  /* remove it */
       lua_createtable(L, 1, 0);  /* create a fresh table */
     }
     lua_pushvalue(L, idx);  /* element to be added */
     lua_rawseti(L, -2, n + 1);
-    lua_setfenv(L, -2);  /* set it as ktable for pattern */
+    lua_setuservalue(L, -2);  /* set it as ktable for pattern */
     return n + 1;
   }
 }
@@ -327,7 +328,7 @@ static TTree *getpatt (lua_State *L, int idx, int *len) {
 */
 static int ktablelen (lua_State *L, int idx) {
   if (!lua_istable(L, idx)) return 0;
-  else return lua_objlen(L, idx);
+  else return lua_rawlen(L, idx);
 }
 
 
@@ -355,21 +356,21 @@ static int concattable (lua_State *L, int idx1, int idx2) {
 */
 static int joinktables (lua_State *L, int p1, int p2) {
   int n1, n2;
-  lua_getfenv(L, p1);  /* get ktables */
-  lua_getfenv(L, p2);
+  lua_getuservalue(L, p1);  /* get ktables */
+  lua_getuservalue(L, p2);
   n1 = ktablelen(L, -2);
   n2 = ktablelen(L, -1);
   if (n1 == 0 && n2 == 0) {  /* are both tables empty? */
     lua_pop(L, 2);  /* nothing to be done; pop tables */
     return 0;  /* nothing to correct */
   }
-  if (n2 == 0 || lua_equal(L, -2, -1)) {  /* second table is empty or equal? */
+  if (n2 == 0 || lua_compare(L, -2, -1, LUA_OPEQ)) {  /* second table is empty or equal? */
     lua_pop(L, 1);  /* pop 2nd table */
-    lua_setfenv(L, -2);  /* set 1st ktable into new pattern */
+    lua_setuservalue(L, -2);  /* set 1st ktable into new pattern */
     return 0;  /* nothing to correct */
   }
   if (n1 == 0) {  /* first table is empty? */
-    lua_setfenv(L, -3);  /* set 2nd table into new pattern */
+    lua_setuservalue(L, -3);  /* set 2nd table into new pattern */
     lua_pop(L, 1);  /* pop 1st table */
     return 0;  /* nothing to correct */
   }
@@ -378,7 +379,7 @@ static int joinktables (lua_State *L, int p1, int p2) {
     /* stack: new p; ktable p1; ktable p2; new ktable */
     concattable(L, -3, -1);  /* from p1 into new ktable */
     concattable(L, -2, -1);  /* from p2 into new ktable */
-    lua_setfenv(L, -4);  /* new ktable becomes p env */
+    lua_setuservalue(L, -4);  /* new ktable becomes p env */
     lua_pop(L, 2);  /* pop other ktables */
     return n1;  /* correction for indices from p2 */
   }
@@ -416,8 +417,8 @@ static void correctkeys (TTree *tree, int n) {
 ** copy 'ktable' of element 'idx' to new tree (on top of stack)
 */
 static void copyktable (lua_State *L, int idx) {
-  lua_getfenv(L, idx);
-  lua_setfenv(L, -2);
+  lua_getuservalue(L, idx);
+  lua_setuservalue(L, -2);
 }
 
 
@@ -428,8 +429,8 @@ static void copyktable (lua_State *L, int idx) {
 */
 static void mergektable (lua_State *L, int idx, TTree *rule) {
   int n;
-  lua_getfenv(L, -1);  /* get ktables */
-  lua_getfenv(L, idx);
+  lua_getuservalue(L, -1);  /* get ktables */
+  lua_getuservalue(L, idx);
   n = concattable(L, -1, -2);
   lua_pop(L, 2);  /* remove both ktables */
   correctkeys(rule, n);
@@ -524,7 +525,7 @@ static int lp_choice (lua_State *L) {
 */
 static int lp_star (lua_State *L) {
   int size1;
-  int n = luaL_checkint(L, 2);
+  int n = (int)luaL_checkinteger(L, 2);
   TTree *tree1 = gettree(L, 1, &size1);
   if (n >= 0) {  /* seq tree1 (seq tree1 ... (seq tree1 (rep tree1))) */
     TTree *tree = newtree(L, (n + 1) * (size1 + 1));
@@ -747,7 +748,7 @@ static int lp_poscapture (lua_State *L) {
 
 
 static int lp_argcapture (lua_State *L) {
-  int n = luaL_checkint(L, 1);
+  int n = (int)luaL_checkinteger(L, 1);
   TTree *tree = newemptycap(L, Carg, 0);
   tree->key = n;
   luaL_argcheck(L, 0 < n && n <= SHRT_MAX, 1, "invalid argument index");
@@ -851,7 +852,7 @@ static int collectrules (lua_State *L, int arg, int *totalsize) {
   lua_pushnil(L);  /* prepare to traverse grammar table */
   while (lua_next(L, arg) != 0) {
     if (lua_tonumber(L, -2) == 1 ||
-        lua_equal(L, -2, postab + 1)) {  /* initial rule? */
+        lua_compare(L, -2, postab + 1, LUA_OPEQ)) {  /* initial rule? */
       lua_pop(L, 1);  /* remove value (keep key for lua_next) */
       continue;
     }
@@ -1000,7 +1001,7 @@ static void verifygrammar (lua_State *L, TTree *grammar) {
 */
 static void initialrulename (lua_State *L, TTree *grammar, int frule) {
   if (sib1(grammar)->key == 0) {  /* initial rule is not referenced? */
-    int n = lua_objlen(L, -1) + 1;  /* index for name */
+    int n = lua_rawlen(L, -1) + 1;  /* index for name */
     lua_pushvalue(L, frule);  /* rule's name */
     lua_rawseti(L, -2, n);  /* ktable was on the top of the stack */
     sib1(grammar)->key = n;
@@ -1016,9 +1017,9 @@ static TTree *newgrammar (lua_State *L, int arg) {
   luaL_argcheck(L, n <= MAXRULES, arg, "grammar has too many rules");
   g->tag = TGrammar;  g->u.n = n;
   lua_newtable(L);  /* create 'ktable' */
-  lua_setfenv(L, -2);
+  lua_setuservalue(L, -2);
   buildgrammar(L, g, frule, n);
-  lua_getfenv(L, -1);  /* get 'ktable' for new tree */
+  lua_getuservalue(L, -1);  /* get 'ktable' for new tree */
   finalfix(L, frule - 1, g, sib1(g));
   initialrulename(L, g, frule);
   verifygrammar(L, g);
@@ -1032,7 +1033,7 @@ static TTree *newgrammar (lua_State *L, int arg) {
 
 
 static Instruction *prepcompile (lua_State *L, Pattern *p, int idx) {
-  lua_getfenv(L, idx);  /* push 'ktable' (may be used by 'finalfix') */
+  lua_getuservalue(L, idx);  /* push 'ktable' (may be used by 'finalfix') */
   finalfix(L, 0, NULL, p->tree);
   lua_pop(L, 1);  /* remove 'ktable' */
   return compile(L, p);
@@ -1043,7 +1044,7 @@ static int lp_printtree (lua_State *L) {
   TTree *tree = getpatt(L, 1, NULL);
   int c = lua_toboolean(L, 2);
   if (c) {
-    lua_getfenv(L, 1);  /* push 'ktable' (may be used by 'finalfix') */
+    lua_getuservalue(L, 1);  /* push 'ktable' (may be used by 'finalfix') */
     finalfix(L, 0, NULL, tree);
     lua_pop(L, 1);  /* remove 'ktable' */
   }
@@ -1096,7 +1097,7 @@ static int lp_match (lua_State *L) {
   int ptop = lua_gettop(L);
   lua_pushnil(L);  /* initialize subscache */
   lua_pushlightuserdata(L, capture);  /* initialize caplistidx */
-  lua_getfenv(L, 1);  /* initialize penvidx */
+  lua_getuservalue(L, 1);  /* initialize penvidx */
   r = match(L, s, s + i, s + l, code, capture, ptop);
   if (r == NULL) {
     lua_pushnil(L);
@@ -1222,8 +1223,18 @@ int luaopen_lpeg (lua_State *L) {
   luaL_newmetatable(L, PATTERN_T);
   lua_pushnumber(L, MAXBACK);  /* initialize maximum backtracking */
   lua_setfield(L, LUA_REGISTRYINDEX, MAXSTACKIDX);
-  luaL_register(L, NULL, metareg);
-  luaL_register(L, "lpeg", pattreg);
+
+  //luaL_register(L, NULL, metareg);
+  //luaL_register(L, "lpeg", pattreg);
+
+  lua_newtable(L);
+  luaL_setfuncs(L, metareg, 0);
+  lua_setglobal(L, "metareg");
+
+  lua_newtable(L);
+  luaL_setfuncs(L, pattreg, 0);
+  lua_setglobal(L, "lpeg");
+
   lua_pushvalue(L, -1);
   lua_setfield(L, -3, "__index");
   return 1;
